@@ -32,15 +32,16 @@ class HttpEndpointProvider(Object):
         scheme: str = 'http',
         listen_port: int = 80,
         set_ports: bool = False,
+        hostname: str | None = None,
     ) -> None:
         """Initialize an instance of HttpEndpointProvider class.
 
         The provider side of the http_endpoint interface publishes the HTTP endpoint information of
         the leader unit in the relation application data bag. The provider can be initialized with
-        custom parameters (path, scheme, listen_port) if they are known in advanced. By default,
-        the endpoint will be assumed to be at the root path "/" using the "http" scheme on port 80.
-        Alternatively, if the scheme and port are not known at the beginning or depend on other
-        factors (e.g. config option or certificate relation), the provider can updated those
+        custom parameters (path, scheme, listen_port, hostname) if they are known in advanced. By
+        default, the endpoint will be assumed to be at the root path "/" using the "http" scheme on
+        port 80. Alternatively, if the scheme and port are not known at the beginning or depend on
+        other factors (e.g. config option or certificate relation), the provider can updated those
         parameters later via `update_config` method.
 
         The provider can also optionally set the port on the unit if specified, but the charm
@@ -54,6 +55,7 @@ class HttpEndpointProvider(Object):
             scheme: The scheme to use (only http or https).
             listen_port: The listen port to open [1, 65535].
             set_ports: Whether to set the unit port on the charm.
+            hostname: Use hostname instead of ingress address if available.
         """
         super().__init__(charm, relation_name)
 
@@ -63,6 +65,7 @@ class HttpEndpointProvider(Object):
         self.scheme = scheme
         self.listen_port = listen_port
         self.set_ports = set_ports
+        self.hostname = hostname
 
         self.framework.observe(charm.on[relation_name].relation_changed, self._configure)
         self.framework.observe(charm.on.config_changed, self._configure)
@@ -86,21 +89,26 @@ class HttpEndpointProvider(Object):
             logger.debug('No %s relations found', self.relation_name)
             return
 
-        # Get the leader"s address
-        binding = self.charm.model.get_binding(self.relation_name)
-        if not binding:
-            logger.warning('Could not determine ingress address for http endpoint relation')
-            return
+        hostname: str | None = None
+        if not self.hostname:
+            # Get the leader"s address
+            binding = self.charm.model.get_binding(self.relation_name)
+            if not binding:
+                logger.warning('Could not determine ingress address for http endpoint relation')
+                return
 
-        ingress_address = binding.network.ingress_address
-        if not ingress_address:
-            logger.warning(
-                'Relation data (%s) is not ready: missing ingress address', self.relation_name
-            )
-            return
+            ingress_address = binding.network.ingress_address
+            if not ingress_address:
+                logger.warning(
+                    'Relation data (%s) is not ready: missing ingress address',
+                    self.relation_name,
+                )
+                return
+            hostname = str(ingress_address)
 
         # Publish the HTTP endpoint to all relations" application data bags
-        url = f'{self.scheme}://{ingress_address}:{self.listen_port}/{self.path.lstrip("/")}'
+        hostname = self.hostname or hostname
+        url = f'{self.scheme}://{hostname}:{self.listen_port}/{self.path.lstrip("/")}'
         try:
             http_endpoint = _HttpEndpointDataModel(url=HttpUrl(url))
             for relation in relations:
@@ -117,7 +125,12 @@ class HttpEndpointProvider(Object):
             self.charm.unit.set_ports(self.listen_port)
 
     def update_config(
-        self, path: str, scheme: str, listen_port: int, set_ports: bool = False
+        self,
+        path: str,
+        scheme: str,
+        listen_port: int,
+        set_ports: bool = False,
+        hostname: str | None = None,
     ) -> None:
         """Update http endpoint configuration.
 
@@ -126,6 +139,7 @@ class HttpEndpointProvider(Object):
             scheme: The scheme to use (only http or https).
             listen_port: The listen port to open [1, 65535].
             set_ports: Whether to set the unit ports on the charm.
+            hostname: Use hostname instead of ingress address if available.
 
         Raises:
             HttpEndpointInvalidDataError if not valid scheme.
@@ -134,6 +148,7 @@ class HttpEndpointProvider(Object):
         self.scheme = scheme
         self.listen_port = listen_port
         self.set_ports = set_ports
+        self.hostname = hostname
         self._update_config()
 
 
